@@ -53,6 +53,8 @@ pub struct Documents {
     pub choice: Answer,
     /// Save As is answering a Close/Quit prompt.
     saving: bool,
+    /// Inline title editor: tab, draft name, and whether it needs initial focus.
+    renaming: Option<(usize, String, bool)>,
 }
 
 impl Documents {
@@ -126,6 +128,9 @@ pub fn switch(app: &mut SolveApp, i: usize) {
         return;
     }
     app.home.open = false;
+    if app.docs.renaming.as_ref().is_some_and(|(tab, _, _)| *tab != i) {
+        app.docs.renaming = None;
+    }
     if i == app.docs.active || i >= app.docs.slots.len() {
         return;
     }
@@ -391,14 +396,13 @@ pub fn tabs(app: &mut SolveApp, ui: &mut egui::Ui, r: Rect, x0: f32, x1: f32) {
         let active = !app.home.open && (i == app.docs.active || app.docs.slots.is_empty());
         let resp = ui.interact(tr, ui.id().with(("doc_tab", i)), Sense::click_and_drag());
         crate::scenario::publish_handle(&format!("tab:design:{i}"), tr.center());
-        // The tabs are part of the title bar: dragging one moves the window, a double click
-        // maximizes it.
-        if app.custom_titlebar || app.integrated_titlebar {
-            if resp.drag_started_by(egui::PointerButton::Primary) {
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
-            } else if resp.double_clicked() {
-                crate::titlebar::toggle_maximize(ui.ctx());
-            }
+        // A tab can still drag the native window; double-click edits its name.
+        if (app.custom_titlebar || app.integrated_titlebar) && resp.drag_started_by(egui::PointerButton::Primary) {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
+        if resp.double_clicked() && !app.file_load.busy() {
+            pick = Some(i);
+            app.docs.renaming = Some((i, name.clone(), true));
         }
         tab_shape(ui.painter(), &t, tr, active, resp.hovered());
         let ink = if active { t.text } else { t.app_bar_text };
@@ -406,7 +410,35 @@ pub fn tabs(app: &mut SolveApp, ui: &mut egui::Ui, r: Rect, x0: f32, x1: f32) {
         let g = ui.painter().layout_no_wrap(label, FontId::proportional(13.0), ink);
         let text_w = (tr.width() - 30.0).max(10.0);
         let clip = Rect::from_min_size(tr.min, vec2(text_w + 10.0, tr.height()));
-        ui.painter().with_clip_rect(clip).galley(pos2(tr.left() + 10.0, tr.center().y - g.size().y / 2.0), g, ink);
+        if let Some((tab, draft, focus)) = &mut app.docs.renaming
+            && *tab == i
+        {
+            let edit_rect = Rect::from_min_max(pos2(tr.left() + 7.0, tr.top() + 3.0), pos2(tr.right() - 26.0, tr.bottom() - 3.0));
+            let editor = egui::TextEdit::singleline(draft).id(ui.id().with(("doc_name", i))).char_limit(255);
+            let response = ui.put(edit_rect, editor);
+            crate::scenario::publish_handle("document:name", edit_rect.center());
+            if *focus {
+                response.request_focus();
+                if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), response.id) {
+                    state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
+                        egui::text::CCursor::new(0),
+                        egui::text::CCursor::new(draft.chars().count()),
+                    )));
+                    state.store(ui.ctx(), response.id);
+                }
+                *focus = false;
+            } else if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+                app.docs.renaming = None;
+            } else if response.lost_focus() || response.clicked_elsewhere() || ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                let name = draft.trim().to_string();
+                app.docs.renaming = None;
+                if !name.is_empty() && name != app.session.doc.name {
+                    let _ = app.run("doc.rename", json!({"name": name}));
+                }
+            }
+        } else {
+            ui.painter().with_clip_rect(clip).galley(pos2(tr.left() + 10.0, tr.center().y - g.size().y / 2.0), g, ink);
+        }
         // ×
         let xr = Rect::from_center_size(pos2(tr.right() - 13.0, tr.center().y), vec2(16.0, 16.0));
         let xresp = ui.interact(xr, ui.id().with(("doc_close", i)), Sense::click());
@@ -687,6 +719,52 @@ mod tests {
                 assert!(rects.iter().all(|(rect, _)| rect.stroke.width == 0.0), "tabs have no outline (active: {active})");
             }
         }
+    }
+
+    #[test]
+    fn double_click_tab_renames_and_escape_cancels() {
+        fn begin_edit(h: &mut crate::scenario::Harness) {
+            // Separate gestures so they are not interpreted as a triple click.
+            h.frames(30);
+            h.step(&json!({"click": {"handle": "tab:design:0"}, "double": true})).unwrap();
+            assert!(h.app.docs.renaming.is_some(), "double-click opens the name editor");
+        }
+        let mut h = crate::scenario::Harness::new();
+        begin_edit(&mut h);
+        h.run(&json!([
+            {"text": "Bracket"},
+            {"key": "Enter"}
+        ]))
+        .unwrap();
+        assert_eq!(h.app.session.doc.name, "Bracket");
+        assert!(h.app.session.is_dirty());
+        begin_edit(&mut h);
+        h.run(&json!([
+            {"text": "Discard this"},
+            {"key": "Escape"}
+        ]))
+        .unwrap();
+        assert_eq!(h.app.session.doc.name, "Bracket");
+        assert!(h.app.docs.renaming.is_none());
+        begin_edit(&mut h);
+        h.run(&json!([
+            {"text": "Housing"},
+            {"click": [800, 500]}
+        ]))
+        .unwrap();
+        assert_eq!(h.app.session.doc.name, "Housing");
+        new_design(&mut h.app);
+        h.frames(3);
+        begin_edit(&mut h);
+        h.run(&json!([
+            {"text": "First design"},
+            {"key": "Enter"}
+        ]))
+        .unwrap();
+        assert_eq!(h.app.docs.active, 0);
+        assert_eq!(h.app.session.doc.name, "First design");
+        switch(&mut h.app, 1);
+        assert_eq!(h.app.session.doc.name, "Untitled");
     }
 
     #[test]

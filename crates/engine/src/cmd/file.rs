@@ -15,6 +15,7 @@ use crate::params::{bad, bool_, num, str_, string_list};
 use crate::{EngineError, Result, Session};
 
 pub static COMMANDS: &[CommandSpec] = &[
+    CommandSpec::new("doc.rename", "Rename Design", rename).icon("rename").doc_only().params("name: non-empty design name (up to 255 bytes)"),
     CommandSpec::new("file.new", "New Design", new_doc).icon("new").key("Ctrl+N").noundo().params("name?"),
     CommandSpec::new("doc.open", "Open", open)
         .icon("open")
@@ -62,6 +63,15 @@ pub static COMMANDS: &[CommandSpec] = &[
 fn new_doc(s: &mut Session, p: &Value) -> Result<Value> {
     let name = str_(p, "name").unwrap_or("Untitled");
     s.replace_design(Session::new(Document::new(name)));
+    Ok(json!({"name": name}))
+}
+
+fn rename(s: &mut Session, p: &Value) -> Result<Value> {
+    let name = str_(p, "name")
+        .map(str::trim)
+        .filter(|name| !name.is_empty() && name.len() <= 255 && !name.chars().any(char::is_control))
+        .ok_or_else(|| bad("doc.rename", "`name` must contain 1–255 bytes and no control characters"))?;
+    s.doc_mut().name = name.to_string();
     Ok(json!({"name": name}))
 }
 
@@ -904,6 +914,27 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("solidcraft-name-{tag}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn rename_design_is_validated_undoable_and_saved() {
+        let mut s = Session::default();
+        s.execute("doc.rename", &json!({"name": "  Mounting bracket  "})).unwrap();
+        assert_eq!(s.doc.name, "Mounting bracket");
+        assert!(s.is_dirty());
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.doc.name, "Untitled");
+        s.execute("edit.redo", &json!({})).unwrap();
+        assert_eq!(s.doc.name, "Mounting bracket");
+        for name in ["".to_string(), "  ".to_string(), "x".repeat(256), "a\nb".to_string()] {
+            assert!(s.execute("doc.rename", &json!({"name": name})).is_err());
+            assert_eq!(s.doc.name, "Mounting bracket");
+        }
+        let dir = name_dir("rename");
+        let path = dir.join("part.solidcraft");
+        s.execute("file.save_as", &json!({"path": path})).unwrap();
+        assert_eq!(solidcraft_io::read_design(&std::fs::read(&path).unwrap()).unwrap().name, "Mounting bracket");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
