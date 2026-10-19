@@ -47,5 +47,7 @@
     addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); window.solidcraftInstall = e; });
     addEventListener("appinstalled", () => { window.solidcraftInstall = null; });
   </script>
+  <!-- ProPanes feedback widget (packaging/propanes/README.md): served same-origin under /propanes/ by the host. -->
+  <script src="/propanes/widget/propanes.js" data-endpoint="/propanes/api/v1/feedback" data-app-key="pw_-AikfTNzx89MrZeKru9g5nOGpgDqQ_-yXDjoK-QCoWo" data-mode="always"></script>
 </body>
 </html>

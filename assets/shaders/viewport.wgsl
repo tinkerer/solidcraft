@@ -29,7 +29,9 @@ fn near_z(c: vec4<f32>) -> f32 {
 }
 
 @group(1) @binding(2) var acc_t: texture_2d<f32>;
-@group(2) @binding(0) var ao_depth: texture_depth_2d;
+// Bound as an unfilterable float texture (not texture_depth_2d): naga's GLSL backend has no
+// textureLoad for depth textures, which broke the WebGL2 fallback of the web app.
+@group(2) @binding(0) var ao_depth: texture_2d<f32>;
 
 fn clipped(p: vec3<f32>) -> bool {
     return length(u.clip.xyz) > 0.5 && dot(u.clip.xyz, p) > u.clip.w;
@@ -180,7 +182,7 @@ fn occlusion(i: TOut) -> f32 {
         let ndc = q.xyz / q.w;
         let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
         if (any(uv < vec2<f32>(0.0)) || any(uv >= vec2<f32>(1.0)) || ndc.z < 0.0 || ndc.z > 1.0) { continue; }
-        let d0 = textureLoad(ao_depth, vec2<i32>(uv * vec2<f32>(size)), 0);
+        let d0 = textureLoad(ao_depth, vec2<i32>(uv * vec2<f32>(size)), 0).r;
         let zs = select(ndc.z, 1.0 - ndc.z, flip);
         let zn = select(near.z / near.w, 1.0 - near.z / near.w, flip);
         let d = select(d0, 1.0 - d0, flip);

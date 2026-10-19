@@ -1,0 +1,20 @@
+# systemd unit for the SolidCraft web app with the ProPanes widget proxy
+# (packaging/propanes/serve.mjs). Install:
+#   sudo cp packaging/propanes/solidcraft-web.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now solidcraft-web
+[Unit]
+Description=SolidCraft web app (static site + ProPanes widget proxy)
+After=network.target
+
+[Service]
+Type=simple
+User=azureuser
+WorkingDirectory=/home/azureuser/solidcraft
+Environment=PORT=3088
+Environment=PROPANES_UPSTREAM=http://127.0.0.1:3001
+ExecStart=/usr/bin/env node packaging/propanes/serve.mjs
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

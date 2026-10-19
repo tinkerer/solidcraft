@@ -42,7 +42,9 @@ impl Resources {
                 binding: 0,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Depth,
+                    // Depth formats may be bound as unfilterable floats; `Depth` would need WGSL's
+                    // `texture_depth_2d`, whose `textureLoad` naga cannot translate to GLSL (WebGL2).
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
                     view_dimension: wgpu::TextureViewDimension::D2,
                     multisampled: false,
                 },
