@@ -26,7 +26,7 @@ pub(crate) struct NavCaps {
     /// Orbit (and continuous orbit) is allowed; off for flat 2D pages, where pan and zoom remain.
     pub orbit: bool,
     /// What is under the pointer can be picked or dragged, so presses on it don't navigate the
-    /// way presses on empty space do (OpenSCAD's left drag, Ctrl+left orbit).
+    /// way presses on empty space do (OpenSCAD's unmodified left drag).
     pub pick: bool,
 }
 
@@ -381,9 +381,9 @@ pub(crate) fn handle(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect, resp: &e
         } else {
             None
         };
-        // Ctrl+left drag from empty space orbits in every preset (Cmd on macOS). A Ctrl+click
-        // still selects, and Ctrl on geometry still drags it without snapping.
-        let ctrl_orbit = (mods.ctrl || mods.command) && !mods.shift && !mods.alt && empty_space(app);
+        // Ctrl+left drag orbits in every preset, including over geometry (Cmd on macOS).
+        // A Ctrl+click still selects; navigation starts only once the pointer drags.
+        let ctrl_orbit = (mods.ctrl || mods.command) && !mods.shift && !mods.alt && app.viewport.context_menu.is_none();
         app.viewport.primary_nav = preset.or(ctrl_orbit.then_some(NavMode::Orbit));
     } else if !primary_down && !primary_released {
         app.viewport.primary_nav = None;

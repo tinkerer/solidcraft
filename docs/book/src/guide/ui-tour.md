@@ -29,8 +29,8 @@
   trackpad, pinch zooms and two-finger scroll pans (Navigation › Two-finger scroll pans;
   off: scroll zooms like the wheel); mouse wheels zoom and the thumb wheel pans sideways.
   Shift+middle orbits freely
-  in the default and Inventor presets. In every preset, Ctrl+left drag (Cmd on macOS) that starts
-  on empty space orbits; a Ctrl+click still adds to the selection. Shift+right-drag snaps to the nearest standard or
+  in the default and Inventor presets. In every preset, Ctrl+left drag (Cmd on macOS) orbits, including when it starts
+  over the model; a Ctrl+click still adds to the selection. Shift+right-drag snaps to the nearest standard or
   diagonal view; Shift does not request snapping when the preset already requires it to orbit.
   With **Touchpad** selected in Preferences › Navigation, hold **Shift** and move the pointer to
   pan, or hold **Alt** (**Option** on macOS) and move it to orbit—no mouse button is needed.
