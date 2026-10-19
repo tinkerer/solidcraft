@@ -4342,57 +4342,67 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_left_drag_from_empty_space_orbits_in_every_preset() {
+    fn ctrl_and_cmd_left_drag_orbits_over_geometry_in_every_preset() {
         for preset in crate::prefs::NAV_PRESETS.iter().map(|p| p.id) {
-            for action in ["orbit", "tool", "point", "click"] {
-                let ctx = egui::Context::default();
-                let mut app = hover_app(false);
-                app.preferences.nav = preset.into();
-                app.ui.show_origin = false;
-                hover_frame(&mut app, &ctx, vec![]);
-                let point = projection(&app, app.viewport.rect.unwrap()).to_screen(Vec3::ZERO).unwrap();
-                let (start, end) = match action {
-                    "point" => (point, point + vec2(30.0, 20.0)),
-                    "click" => (point, point),
-                    _ => (point - vec2(60.0, 60.0), point - vec2(20.0, 30.0)),
-                };
-                if action == "tool" {
-                    app.start("sketch.line");
-                }
-                let before = app.cam;
-                let undo = app.session.undo.len();
-                let modifiers = egui::Modifiers { ctrl: true, command: !cfg!(target_os = "macos"), ..Default::default() };
-                let frame = |app: &mut SolveApp, mut events: Vec<egui::Event>| {
-                    events.insert(0, egui::Event::ModifiersChanged(modifiers));
-                    hover_frame(app, &ctx, events);
-                };
-                frame(
-                    &mut app,
-                    vec![
-                        egui::Event::PointerMoved(start),
-                        egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers },
-                    ],
-                );
-                frame(&mut app, vec![egui::Event::PointerMoved(end)]);
-                frame(&mut app, vec![]);
-                match action {
-                    "orbit" | "tool" => {
-                        assert_ne!(app.cam, before, "{preset}: Ctrl+left drag on empty space orbits ({action})");
-                        assert!(app.viewport.boxsel.is_none(), "{preset}: no box selection while orbiting");
+            for action in ["orbit", "tool", "point", "face", "click"] {
+                for modifiers in [egui::Modifiers::CTRL, egui::Modifiers::MAC_CMD | egui::Modifiers::COMMAND] {
+                    let ctx = egui::Context::default();
+                    let mut app = hover_app(false);
+                    app.preferences.nav = preset.into();
+                    if action == "face" {
+                        app.run("sketch.finish", json!({})).unwrap();
+                        app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
+                        app.cam.target = Vec3::new(20.0, 15.0, 10.0);
                     }
-                    "point" => {
-                        assert_eq!(app.cam, before, "{preset}: Ctrl+drag on sketch geometry is not an orbit");
-                        assert!(app.viewport.point_drag.is_some(), "{preset}: Ctrl+drag still drags the point");
+                    app.ui.show_origin = false;
+                    hover_frame(&mut app, &ctx, vec![]);
+                    let point = projection(&app, app.viewport.rect.unwrap()).to_screen(Vec3::ZERO).unwrap();
+                    let (start, end) = match action {
+                        "point" => (point, point + vec2(30.0, 20.0)),
+                        "face" => (app.viewport.rect.unwrap().center(), app.viewport.rect.unwrap().center() + vec2(30.0, 20.0)),
+                        "click" => (point, point),
+                        _ => (point - vec2(60.0, 60.0), point - vec2(20.0, 30.0)),
+                    };
+                    if action == "tool" {
+                        app.start("sketch.line");
                     }
-                    _ => assert_eq!(app.cam, before, "{preset}: a Ctrl+click does not orbit"),
-                }
-                frame(&mut app, vec![egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers }]);
-                frame(&mut app, vec![]);
-                match action {
-                    "click" => assert!(!app.session.selection.is_empty(), "{preset}: Ctrl+click still selects"),
-                    "tool" => assert_eq!(app.session.undo.len(), undo, "{preset}: the orbit drag adds no geometry"),
-                    "orbit" => assert!(app.session.selection.is_empty(), "{preset}: the end of the orbit selects nothing"),
-                    _ => {}
+                    let before = app.cam;
+                    let undo = app.session.undo.len();
+                    if action == "face" {
+                        assert!(pick(&app, &projection(&app, app.viewport.rect.unwrap()), start).iter().any(|h| matches!(h, Hit::Face { .. })));
+                    }
+                    let frame = |app: &mut SolveApp, mut events: Vec<egui::Event>| {
+                        events.insert(0, egui::Event::ModifiersChanged(modifiers));
+                        hover_frame(app, &ctx, events);
+                    };
+                    frame(
+                        &mut app,
+                        vec![
+                            egui::Event::PointerMoved(start),
+                            egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers },
+                        ],
+                    );
+                    frame(&mut app, vec![egui::Event::PointerMoved(end)]);
+                    frame(&mut app, vec![]);
+                    match action {
+                        "orbit" | "tool" | "point" | "face" => {
+                            assert_ne!(app.cam, before, "{preset}: {modifiers:?}+left drag orbits ({action})");
+                            assert!(app.viewport.boxsel.is_none(), "{preset}: no box selection while orbiting");
+                            assert!(app.viewport.point_drag.is_none(), "{preset}: orbit never drags geometry");
+                        }
+                        _ => assert_eq!(app.cam, before, "{preset}: a modified click does not orbit"),
+                    }
+                    frame(&mut app, vec![egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers }]);
+                    frame(&mut app, vec![]);
+                    match action {
+                        "click" => assert!(!app.session.selection.is_empty(), "{preset}: Ctrl+click still selects"),
+                        "tool" => assert_eq!(app.session.undo.len(), undo, "{preset}: the orbit drag adds no geometry"),
+                        "orbit" | "point" | "face" => {
+                            assert!(app.session.selection.is_empty(), "{preset}: the end of the orbit selects nothing");
+                            assert_eq!(app.session.undo.len(), undo, "{preset}: orbit does not edit geometry");
+                        }
+                        _ => {}
+                    }
                 }
             }
         }

@@ -1,6 +1,6 @@
 [
  {
-  "note": "Dragging sketch geometry snaps like Fusion: onto a point (coincident on release), level with a point (a dashed guide, no constraint), not at all with Ctrl held; a line dragged by its body snaps by its ends."
+  "note": "Dragging sketch geometry snaps: onto a point (coincident on release), level with a point (a dashed guide, no constraint), not at all with Alt held; a line dragged by its body snaps by its ends."
  },
  {
   "start": "sketch.create"
@@ -149,7 +149,7 @@
   }
  },
  {
-  "note": "Ctrl held: no snap (the end stays where it is let go)."
+  "note": "Alt held: no snap (the end stays where it is let go)."
  },
  {
   "drag": [
@@ -167,7 +167,7 @@
    }
   ],
   "steps": 12,
-  "ctrl": true
+  "alt": true
  },
  {
   "expect": {

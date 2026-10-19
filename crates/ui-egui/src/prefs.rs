@@ -1262,7 +1262,7 @@ fn page(app: &mut SolveApp, ui: &mut egui::Ui, t: &Tokens) {
                 note(ui, crate::i18n::tr("nav.touchpad.help"));
             } else {
                 let snap_help = if app.preferences.nav == OPENSCAD_NAV { "" } else { "; hold Shift during orbit to snap" };
-                let raw_help = format!("{}; Ctrl+left drag on empty space orbits{snap_help}; hold Space to pan; the wheel zooms", nav_preset(&app.preferences.nav).help);
+                let raw_help = format!("{}; Ctrl+left drag orbits{snap_help}; hold Space to pan; the wheel zooms", nav_preset(&app.preferences.nav).help);
                 note(ui, crate::i18n::tr_label(&raw_help));
             }
             ui.label(crate::i18n::tr_label("Context menu"));
@@ -2189,7 +2189,7 @@ mod tests {
     #[test]
     fn blender_preset_moves_the_camera_with_the_middle_button_only() {
         // #1090: orbit, pan and zoom all on the middle button; no left or right drag binding, so
-        // those stay selection and the context menu (Ctrl+left on empty space orbits in every
+        // those stay selection and the context menu (Ctrl+left orbits in every
         // preset, outside the bindings).
         let mut app = SolveApp::new(solidcraft_engine::Session::default(), Default::default());
         set(&mut app, &json!({"nav": "blender"})).unwrap();
