@@ -91,7 +91,7 @@ impl Policy {
         }
     }
 
-    fn admits(self, tier: Tier) -> bool {
+    pub(crate) fn admits(self, tier: Tier) -> bool {
         match self {
             Policy::Auto => true,
             Policy::Hardware => tier == Tier::Hardware,
@@ -139,7 +139,7 @@ pub fn native_backends() -> wgpu::Backends {
     }
 }
 
-fn tier_of(t: wgpu::DeviceType) -> Tier {
+pub(crate) fn tier_of(t: wgpu::DeviceType) -> Tier {
     match t {
         wgpu::DeviceType::Cpu => Tier::Software,
         wgpu::DeviceType::DiscreteGpu | wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::VirtualGpu | wgpu::DeviceType::Other => Tier::Hardware,
@@ -169,7 +169,7 @@ fn report(info: &wgpu::AdapterInfo) -> AdapterReport {
 }
 
 fn instance() -> wgpu::Instance {
-    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+    let mut desc = crate::instance_descriptor_from_env();
     desc.backends = native_backends();
     wgpu::Instance::new(desc)
 }
@@ -199,6 +199,34 @@ pub fn survey(policy: Policy) -> Survey {
     let chosen = found.iter().position(|r| policy.admits(r.tier));
     let lands_on = policy.lands_on(chosen.and_then(|i| found.get(i)).map(|r| r.tier));
     Survey { backends: format!("{:?}", native_backends()), adapters: found, chosen, lands_on }
+}
+
+/// The backends the GPU path tracer may use among the native ones: Vulkan, and Metal on macOS
+/// (D3D12 is out, #3217: it was never faster in our measurements and needs minutes to compile
+/// its shader at every start, where Vulkan keeps compiled pipelines between runs).
+pub fn path_backends() -> wgpu::Backends {
+    native_backends() & (wgpu::Backends::VULKAN | wgpu::Backends::METAL)
+}
+
+/// The path-tracer adapter `policy` picks among those `keep` accepts, with its report; `None`
+/// where `path_backends` is empty (`WGPU_BACKEND=dx12`) or no adapter qualifies.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn pick_path(policy: Policy, keep: impl Fn(&wgpu::AdapterInfo) -> bool) -> Option<(wgpu::Adapter, AdapterReport)> {
+    let backends = path_backends();
+    if backends.is_empty() {
+        return None;
+    }
+    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+    desc.backends = backends;
+    let mut all = pollster::block_on(wgpu::Instance::new(desc).enumerate_adapters(backends));
+    all.sort_by_key(|a| std::cmp::Reverse(rank(a.get_info().device_type)));
+    all.into_iter()
+        .filter(|a| keep(&a.get_info()))
+        .map(|a| {
+            let r = report(&a.get_info());
+            (a, r)
+        })
+        .find(|(_, r)| policy.admits(r.tier))
 }
 
 /// The adapter `policy` picks, with its report; `None` when no adapter qualifies.
