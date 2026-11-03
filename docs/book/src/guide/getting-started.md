@@ -110,6 +110,15 @@ The same app runs in the browser: [open SolidCraft on the web](../app/) (`?sampl
 part, `?webgl` forces WebGL2 where WebGPU is missing or misbehaves; the browser remembers it until
 `?webgpu`, and an app installed from Chrome or Edge starts with it too). Designs are saved in the
 browser's private file storage, which needs HTTPS or localhost.
+
+The web app at `/app/` is always the latest release. Two more builds are there to try early:
+the [release candidate](../app-rc/) (the newest `-rc` pre-release; a page saying so appears
+until the first one is out) and the [edge build](../app-edge/) (the current `main`, rebuilt on
+every change). **Both can break, and a design saved in them may not open in the release.** Each
+keeps its designs, settings and recovery copies apart from the release's, so trying one never
+changes what the release sees, and nothing is copied between them: to move a design, save it to
+a file in one and open the file in the other. Search engines are told to skip both.
+
 Planned worker and tiered-storage integration is
 described in [web-runtime.md](https://github.com/tangency-labs/solidcraft/blob/main/docs/web-runtime.md)
 (design; not yet wired in the shipped wasm build).
@@ -312,6 +321,13 @@ rebuilds it; `run` then exits with status 1, lists the failing features and writ
 its `--out` and `--save` files, because the bodies lack what those features should have made.
 `--allow-errors` writes them anyway.
 
+`--param-check warn|strict` checks each step against its command's parameter contract, for the
+commands that have one (`describe_command` in the MCP server shows them); the default, `off`,
+checks nothing. A misspelt optional key, such as `operaton` for `solid.box`'s `operation`, is
+otherwise ignored, and the step builds without it. `warn` runs the step and prints
+``script.json: step 1: unknown key `operaton`; did you mean `operation`?`` on stderr; `strict`
+stops the run at that step, and nothing is written.
+
 `run` prints each command's result with `--results` (otherwise the measurement), and `eval`
 prints the measurement, as JSON on stdout. `--json-out FILE` writes that JSON to a file
 instead. The file is plain UTF-8, which is not what a redirect gives you everywhere: Windows
@@ -326,7 +342,10 @@ cargo run --release -p solidcraft-cli -- eval examples/bracket.json --json-out m
 To find the slow steps of a script, `--timings` prints how long each command took instead of
 the measurement: `{"timings": [{"index", "command", "ms"}], "total_ms"}`, with `index` counted
 from 0. `--profile` adds each command's `profile: {"boolean_ms", "tessellate_ms", "other_ms"}`,
-its wall time in the kernel's booleans, in tessellation and in everything else. With
+its wall time in the kernel's booleans, in tessellation and in everything else, and prints the
+profiler's table on stderr: where the time went, the kernel's calls to the commands
+(`docs/perf.md`, "Where the time goes"); `--profile-out trace.json` also writes the spans as a
+Chrome trace. `--profile` works on a design or STEP file too. With
 `--results` as well, the results go in the same object as `results`; `--results` alone still
 prints a plain array.
 
