@@ -1,12 +1,13 @@
 //! Plastic (enclosure) features: Boss, Lip / Groove, Snap Fit and Rest, and plastic rules.
 
 use serde_json::{Value, json};
+use solidcore_record::Vec3;
 use solidcraft_doc::BodyName;
 use solidcraft_doc::FeatureKind;
 use solidcraft_doc::expr::Kind;
 use solidcraft_doc::plastic::PlasticRule;
 use solidcraft_doc::{Dir, FacePick, Position};
-use solidcraft_geom::Vec3;
+use solidcraft_geom::prelude::*;
 
 use super::CommandSpec;
 use super::features::{add_feature, check_expr};
@@ -22,7 +23,8 @@ pub static COMMANDS: &[CommandSpec] = &[
         "face: [x,y,z] on the rim face of a shelled body; width, height; type?: lip|groove; gap? (groove clearance); side?: inside|outside (which rim edge); body?",
     ),
     CommandSpec::new("plastic.snap_fit", "Snap Fit", snap_fit).at("PLASTIC", "CREATE").icon("snap_fit").params(
-        "position: [x,y,z] on a face; direction? (default: out of the face); hook: [x,y,z] (the catch's direction); length, thickness, width, catch_depth, catch_length; body?",
+        "position: [x,y,z] on a face; direction? (default: out of the face); hook: [x,y,z] (the catch's direction); length, thickness, width, catch_depth, catch_length; \
+         base_height? (extends the base below the face); new_body?: bool (make a separate body instead of joining); body?",
     ),
     CommandSpec::new("plastic.rest", "Rest", rest).at("PLASTIC", "CREATE").icon("rest").params(
         "position: [x,y,z] on a face (the rest's centre); direction? (default: out of the face); width (round: the diameter); length? (a rectangle, along `along`); along?: [x,y,z]; \
@@ -119,7 +121,7 @@ fn manage_rules(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn assign_rule(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "plastic.assign_rule";
-    let bodies = string_list(p, "bodies");
+    let bodies = string_list(cmd, p, "bodies")?;
     if bodies.is_empty() || bodies.len() > 10_000 {
         return Err(bad(cmd, "`bodies` must list bodies"));
     }
@@ -262,6 +264,8 @@ fn snap_fit(s: &mut Session, p: &Value) -> Result<Value> {
         width: required(s, p, "width", Kind::Length, cmd)?,
         catch_depth: required(s, p, "catch_depth", Kind::Length, cmd)?,
         catch_length: required(s, p, "catch_length", Kind::Length, cmd)?,
+        base_height: checked(s, p, "base_height", Kind::Length, cmd)?,
+        new_body: bool_(p, "new_body").unwrap_or(false),
         body: str_(p, "body").map(BodyName::from),
     };
     add_feature(s, p, kind)
@@ -269,7 +273,8 @@ fn snap_fit(s: &mut Session, p: &Value) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
-    use solidcraft_geom::Vec3;
+    use solidcore_record::Vec3;
+    use solidcraft_geom::prelude::*;
     use std::f64::consts::PI;
 
     use serde_json::{Value, json};
@@ -345,9 +350,9 @@ mod tests {
                 for groove in [false, true] {
                     let mut s = Session::default();
                     let plane = if tilted {
-                        solidcraft_geom::Plane::new(Vec3::new(7., -3., 5.), Vec3::new(1., -1., 0.), Vec3::new(1., 1., -2.)).unwrap()
+                        solidcore_record::Plane::new(Vec3::new(7., -3., 5.), Vec3::new(1., -1., 0.), Vec3::new(1., 1., -2.)).unwrap()
                     } else {
-                        solidcraft_geom::Plane::XY
+                        solidcore_record::Plane::XY
                     };
                     if obround {
                         run(&mut s, "sketch.create", json!({"plane": plane, "name": "Rim"}));
@@ -426,6 +431,43 @@ mod tests {
     }
 
     #[test]
+    fn snap_fit_base_height_and_new_body() {
+        let snap =
+            json!({"position": [20, 20, 4], "hook": [1, 0, 0], "length": 15, "thickness": 1.5, "width": 6, "catch_depth": 1, "catch_length": 3});
+        let arm = 1.5 * 15.0 * 6.0 + 0.5 * 1.0 * 3.0 * 6.0;
+        let snap_volume = |s: &mut Session| {
+            let m = run(s, "inspect.measure", json!({}));
+            m["bodies"].as_array().unwrap().iter().map(|b| b["volume_mm3"].as_f64().unwrap()).min_by(f64::total_cmp).unwrap_or(f64::NAN)
+        };
+        // New body: the snap fit stands on its own, its volume exact, so it can be arrayed or moved.
+        let mut s = Session::default();
+        run(&mut s, "solid.box", json!({"length": 40, "width": 40, "height": 4}));
+        let mut p = snap.clone();
+        p["new_body"] = json!(true);
+        run(&mut s, "plastic.snap_fit", p);
+        assert_eq!(run(&mut s, "inspect.measure", json!({}))["body_count"], 2);
+        assert!(rel(snap_volume(&mut s), arm) < 1e-6);
+        // Base height adds a t·w·base_height base below the face.
+        let mut t = Session::default();
+        run(&mut t, "solid.box", json!({"length": 40, "width": 40, "height": 4}));
+        let mut p = snap.clone();
+        p["new_body"] = json!(true);
+        p["base_height"] = json!(4);
+        run(&mut t, "plastic.snap_fit", p);
+        assert!(rel(snap_volume(&mut t), arm + 1.5 * 6.0 * 4.0) < 1e-6);
+        // Joined with a base height it still builds: the base bites into the wall, so the
+        // total grows only by the arm above the face, and there is still one body.
+        let mut u = Session::default();
+        run(&mut u, "solid.box", json!({"length": 40, "width": 40, "height": 4}));
+        let v0 = volume(&mut u);
+        let mut p = snap.clone();
+        p["base_height"] = json!(2);
+        run(&mut u, "plastic.snap_fit", p);
+        assert!(rel(volume(&mut u) - v0, arm) < 1e-6);
+        assert_eq!(run(&mut u, "inspect.measure", json!({}))["body_count"], 1);
+    }
+
+    #[test]
     fn plastic_sizes_below_the_minimum_are_refused_by_name() {
         let mut s = Session::default();
         run(&mut s, "solid.box", json!({"length": 40, "width": 40, "height": 4}));
@@ -469,8 +511,7 @@ mod tests {
         let before = s.model.state_before(feature.id);
         let name = feature.face_names.first().unwrap();
         let point = solidcraft_doc::naming::point_on_face(&before, name, Vec3::new(0., -28., 20.))
-            .expect("the original wall identity survives merged pieces")
-            .0;
+            .expect("the original wall identity survives merged pieces");
         assert!((point - Vec3::new(0., -33., 20.)).len() < 1e-8, "{point:?}");
         assert!(s.model.results.iter().all(|result| result.error.is_none()));
         let check = |session: &Session| {

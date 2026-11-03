@@ -1,6 +1,6 @@
 //! Status heading and constraint meter; Tokens: font_label, text, text_dim, accent, dialog_rule, sketch_accent, spacing.
 use crate::{fonts::RichTextExt as _, theme::Tokens};
-use egui::{RichText, Stroke, vec2};
+use egui::{RichText, vec2};
 
 /// Status content for a named card. `key` is the scenario namespace, `fraction` is clamped.
 pub(crate) struct StatusHeader<'a> {
@@ -40,7 +40,7 @@ pub(crate) fn status_header(ui: &mut egui::Ui, key: &str, name: &str, status: St
             crate::scenario::publish_count(&format!("{key}:constrained_fraction"), f64::from(fraction));
         })
         .response;
-    ui.painter().hline(ui.max_rect().x_range(), ui.cursor().top(), Stroke::new(1.0, t.dialog_rule));
+    t.secondary_hline(ui.painter(), ui.max_rect().x_range(), ui.cursor().top(), t.dialog_rule);
     crate::scenario::publish_target(&format!("{key}:status_header"), response.rect);
     response
 }
@@ -59,4 +59,169 @@ pub(crate) fn progress(ui: &mut egui::Ui, key: &str, fraction: f32) -> egui::Res
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ProgressIndicator, ui.is_enabled(), format!("{:.0}%", fraction * 100.0)));
     crate::scenario::publish_rect(&format!("dialog:progress:{key}"), bar);
     response
+}
+
+/// Steps of a running operation, one row each: a tick for the ones done, a spinner for the one
+/// under way and a ring for the ones to come. The three marks share one box the height of the
+/// text, centred on its capitals, and one stroke. `detail` (how far the current step is) goes at
+/// the end of its row. Pair it with `progress` for the current step.
+/// Tokens: `font_label, control_height, form_ink/dim/primary, space_2/3/8`.
+pub(crate) fn steps(ui: &mut egui::Ui, key: &str, labels: &[&str], current: usize, detail: Option<&str>) {
+    let t = Tokens::get();
+    let mark = t.font_label;
+    let ppp = ui.ctx().pixels_per_point().max(0.5);
+    let snap = |v: f32| (v * ppp).round() / ppp;
+    for (i, label) in labels.iter().enumerate() {
+        let (row, response) =
+            ui.allocate_exact_size(vec2(super::metrics::dimension(ui.available_width()), super::row_height()), egui::Sense::hover());
+        let order = i.cmp(&current);
+        let (font, ink) = match order {
+            std::cmp::Ordering::Equal => (crate::fonts::semibold(t.font_label), t.form_ink),
+            std::cmp::Ordering::Less => (egui::FontId::proportional(t.font_label), t.form_ink),
+            std::cmp::Ordering::Greater => (egui::FontId::proportional(t.font_label), t.form_dim),
+        };
+        let text_left = row.left() + mark + t.space_8;
+        let mut text_right = row.right();
+        if let Some(detail) = detail.filter(|_| i == current) {
+            let galley = ui.painter().layout_no_wrap(detail.to_string(), egui::FontId::proportional(t.font_label), t.form_dim);
+            let at = egui::pos2(snap(row.right() - galley.size().x), snap(row.center().y - galley.size().y / 2.0));
+            if at.x > text_left + t.space_8 {
+                text_right = at.x - t.space_8;
+                ui.painter().galley(at, galley, t.form_dim);
+            }
+        }
+        let mut job = egui::text::LayoutJob::single_section(label.to_string(), egui::TextFormat::simple(font, ink));
+        job.wrap.max_width = (text_right - text_left).max(0.0);
+        job.wrap.max_rows = 1;
+        job.wrap.overflow_character = Some('\u{2026}');
+        let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+        let at = egui::pos2(snap(text_left), snap(row.center().y - galley.size().y / 2.0));
+        // The mark is centred on the label's capitals (its first glyph's ink), not on the line box.
+        let caps = galley
+            .rows
+            .first()
+            .and_then(|r| r.row.glyphs.first().map(|g| r.pos.y + g.pos.y + g.uv_rect.offset.y + g.uv_rect.size.y / 2.0))
+            .map_or(row.center().y, |y| at.y + y);
+        let slot = egui::Rect::from_center_size(egui::pos2(row.left() + mark / 2.0, caps), vec2(mark, mark));
+        let inner = slot.shrink(t.space_3);
+        let stroke = egui::Stroke::new(t.space_2, ink);
+        let painter = ui.painter();
+        match order {
+            std::cmp::Ordering::Less => super::checks::paint_check_glyph(painter, slot, false, t.form_ink),
+            std::cmp::Ordering::Equal => {
+                // Three quarters of a circle turning, the tick's size and stroke: a whole round, never clipped.
+                // The tick's stroke is centred on the box's edges, and so is the circle's.
+                let radius = inner.height() / 2.0;
+                let start = ui.input(|input| input.time) as f32 * std::f32::consts::TAU * 0.8;
+                let points: Vec<egui::Pos2> = (0..=24)
+                    .map(|k| start + k as f32 / 24.0 * std::f32::consts::TAU * 0.75)
+                    .map(|a| inner.center() + radius * vec2(a.cos(), a.sin()))
+                    .collect();
+                painter.add(egui::Shape::line(points, egui::Stroke::new(stroke.width, t.form_primary)));
+                ui.ctx().request_repaint();
+            }
+            std::cmp::Ordering::Greater => {
+                painter.circle_stroke(inner.center(), inner.height() / 2.0, egui::Stroke::new(1.0, t.form_dim));
+            }
+        }
+        ui.painter().with_clip_rect(ui.clip_rect().intersect(row)).galley(at, galley, ink);
+        let state = match order {
+            std::cmp::Ordering::Less => "done",
+            std::cmp::Ordering::Equal => "current",
+            std::cmp::Ordering::Greater => "next",
+        };
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), *label));
+        crate::scenario::publish_rect(&format!("dialog:step:{key}:{i}:{state}"), row);
+        crate::scenario::publish_rect(&format!("dialog:step_mark:{key}:{i}"), slot);
+    }
+}
+
+/// Compact completion readout for a strip. The caller owns the result identity.
+/// Tokens: font_small, form_ink/success/dim, control_height and space_4.
+pub(crate) fn completion_text(ui: &mut egui::Ui, label: &str, complete: bool) -> egui::Response {
+    let t = Tokens::get();
+    let font = egui::FontId::proportional(t.font_small);
+    let text = ui.painter().layout_no_wrap(label.to_owned(), font.clone(), t.form_ink);
+    let tick_width = if complete { t.space_14 + t.space_4 } else { 0.0 };
+    let (rect, response) = ui.allocate_exact_size(vec2(text.size().x + tick_width, t.control_height), egui::Sense::hover());
+    if complete {
+        super::checks::paint_check_glyph(
+            ui.painter(),
+            egui::Rect::from_center_size(rect.left_center() + vec2(t.space_14 / 2.0, 0.0), vec2(t.space_14, t.space_14)),
+            false,
+            t.form_success,
+        );
+    }
+    super::text::paint_text(
+        ui,
+        egui::Rect::from_min_max(rect.min + vec2(tick_width, 0.0), rect.max),
+        label,
+        font,
+        if complete { t.form_ink } else { t.form_dim },
+        false,
+    );
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), label));
+    response
+}
+
+/// Read-only check row with shared success/warning artwork and token-sized icon.
+pub(crate) fn check_line(ui: &mut egui::Ui, key: &str, label: &str, warning: bool) -> egui::Response {
+    check_status_line(ui, key, label, if warning { CheckStatus::Warning } else { CheckStatus::Ok })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CheckStatus {
+    Ok,
+    Warning,
+    Error,
+}
+
+impl CheckStatus {
+    /// Plain-text marker for copied check reports.
+    pub(crate) fn text_marker(self) -> &'static str {
+        match self {
+            Self::Ok => "✓",
+            Self::Warning => "!",
+            Self::Error => "×",
+        }
+    }
+}
+
+/// Semantic status glyphs use the same geometry and theme colours in every report.
+pub(crate) fn check_status_line(ui: &mut egui::Ui, key: &str, label: &str, status: CheckStatus) -> egui::Response {
+    let t = Tokens::get();
+    let response = ui
+        .horizontal(|ui| {
+            let (rect, _) = ui.allocate_exact_size(vec2(t.form_icon_size, t.form_icon_size), egui::Sense::hover());
+            match status {
+                CheckStatus::Ok => super::checks::paint_check_glyph(ui.painter(), rect, false, t.form_success),
+                CheckStatus::Warning | CheckStatus::Error => {
+                    let ink = if status == CheckStatus::Warning { t.warning } else { t.form_error };
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        if status == CheckStatus::Warning { "!" } else { "×" },
+                        egui::FontId::proportional(t.font_subtitle),
+                        ink,
+                    );
+                }
+            }
+            super::text(ui, label, super::Text::Report(key, false));
+        })
+        .response;
+    crate::scenario::publish_rect(key, response.rect);
+    response
+}
+
+/// Single-row render status for a shared Navigation card. The caller dispatches Cancel.
+pub(crate) fn progress_action(ui: &mut egui::Ui, caption: &str, fraction: f32, cancel: &str) -> egui::Response {
+    let t = Tokens::get();
+    ui.horizontal(|ui| {
+        super::text(ui, caption, super::Text::Inline);
+        ui.allocate_ui_with_layout(vec2(t.space_24 * 6.0, t.control_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            progress(ui, "render-pill", fraction);
+        });
+        super::button(ui, cancel, super::Button::Normal)
+    })
+    .inner
 }

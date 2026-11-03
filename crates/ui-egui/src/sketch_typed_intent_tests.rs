@@ -1,6 +1,7 @@
 //! Keyboard-authored intent must survive stage transitions and later model edits.
 use crate::scenario::Harness;
 use serde_json::json;
+use solidcraft_engine::geom::prelude::*;
 use solidcraft_engine::sketch::{ConstraintKind, CurveKind};
 
 fn start(command: &str) -> Harness {
@@ -19,7 +20,17 @@ fn enter(h: &mut Harness) {
     h.step(&json!({"key":"Enter"})).unwrap();
 }
 fn constraints(h: &Harness) -> Vec<ConstraintKind> {
-    h.app.session.world_state().sketch(h.app.session.active_sketch.unwrap()).unwrap().sketch.constraints.iter().map(|c| c.kind.clone()).collect()
+    h.app
+        .session
+        .world_state()
+        .unwrap()
+        .sketch(h.app.session.active_sketch.unwrap())
+        .unwrap()
+        .sketch
+        .constraints
+        .iter()
+        .map(|c| c.kind.clone())
+        .collect()
 }
 
 #[test]
@@ -42,7 +53,7 @@ fn typed_arc_radius_and_signed_sweep_survive_stages_parameter_edit_and_reopen() 
     let path = h.dir.join("typed-arc.solidcraft");
     h.app.run("file.save", json!({"path":path})).unwrap();
     h.app.run("doc.open", json!({"path":path})).unwrap();
-    let state = h.app.session.world_state();
+    let state = h.app.session.world_state().unwrap();
     let sketch = &state.sketches[0].sketch;
     let curve = &sketch.curves[0];
     assert!(curve.reversed, "negative typed sweep must remain clockwise");
@@ -53,7 +64,7 @@ fn typed_arc_radius_and_signed_sweep_survive_stages_parameter_edit_and_reopen() 
 
 #[test]
 fn slots_keep_typed_length_and_width_as_dimensions_and_start_fresh() {
-    for command in ["sketch.slot.center_to_center", "sketch.slot.overall"] {
+    for command in ["sketch.slot.center_to_center", "sketch.slot.overall", "sketch.slot.center_point"] {
         let mut h = start(command);
         type_value(&mut h, "30");
         enter(&mut h);
@@ -78,6 +89,62 @@ fn slots_keep_typed_length_and_width_as_dimensions_and_start_fresh() {
         assert!(h.app.tool.as_ref().unwrap().dim_history.is_empty());
         assert!(h.app.tool.as_ref().unwrap().pts.is_empty());
     }
+}
+
+#[test]
+fn arc_slots_offer_typed_dimensions_and_keep_them_after_creation() {
+    for command in ["sketch.slot.arc_center", "sketch.slot.arc_three_point"] {
+        let mut h = start(command);
+        if command == "sketch.slot.arc_center" {
+            assert_eq!(h.app.tool.as_ref().unwrap().dims[0].label, "Radius");
+            type_value(&mut h, "20 mm");
+            enter(&mut h);
+            assert_eq!(h.app.tool.as_ref().unwrap().dims[0].label, "Sweep");
+            type_value(&mut h, "90 deg");
+            enter(&mut h);
+        } else {
+            h.step(&json!({"click":{"world":[20,20,0]}})).unwrap();
+            h.step(&json!({"click":{"world":[40,0,0]}})).unwrap();
+        }
+        h.step(&json!({"move":{"world":[40,5,0]}})).unwrap();
+        assert_eq!(h.app.tool.as_ref().unwrap().dims[0].label, "Width");
+        type_value(&mut h, "6 mm");
+        let undo = h.app.session.undo.len();
+        enter(&mut h);
+        assert_eq!(h.app.session.undo.len(), undo + 1, "one undo step for {command}");
+        let kinds = constraints(&h);
+        assert!(kinds.iter().any(|k| matches!(k, ConstraintKind::Diameter { value, .. } if (*value - 6.0).abs() < 1e-7)));
+        if command == "sketch.slot.arc_center" {
+            assert!(kinds.iter().any(|k| matches!(k, ConstraintKind::Radius { value, .. } if (*value - 20.0).abs() < 1e-7)));
+            assert!(kinds.iter().any(|k| matches!(k, ConstraintKind::ArcSweep { value, .. } if (*value - std::f64::consts::FRAC_PI_2).abs() < 1e-7)));
+        }
+        assert!(h.app.tool.as_ref().unwrap().pts.is_empty());
+        assert!(h.app.tool.as_ref().unwrap().dim_history.is_empty());
+        h.app.run("edit.undo", json!({})).unwrap();
+        assert!(constraints(&h).is_empty());
+    }
+}
+
+#[test]
+fn arc_slot_invalid_width_keeps_inputs_and_click_uses_corrected_value() {
+    let mut h = start("sketch.slot.arc_center");
+    type_value(&mut h, "10 mm");
+    enter(&mut h);
+    type_value(&mut h, "90 deg");
+    enter(&mut h);
+    h.step(&json!({"move":{"world":[0,15,0]}})).unwrap();
+    type_value(&mut h, "25 mm");
+    let undo = h.app.session.undo.len();
+    enter(&mut h);
+    assert_eq!(h.app.session.undo.len(), undo);
+    assert_eq!(h.app.tool.as_ref().unwrap().pts.len(), 3);
+    assert_eq!(h.app.tool.as_ref().unwrap().dims[0].value, "25 mm");
+    assert!(constraints(&h).is_empty());
+    type_value(&mut h, "4 mm");
+    h.step(&json!({"click":{"world":[30,10,0]}})).unwrap();
+    assert_eq!(h.app.session.undo.len(), undo + 1);
+    assert!(h.app.tool.as_ref().unwrap().pts.is_empty());
+    assert!(constraints(&h).iter().any(|k| matches!(k, ConstraintKind::Diameter { value, .. } if (*value - 4.0).abs() < 1e-7)));
 }
 
 #[test]
@@ -125,7 +192,7 @@ fn polygon_radius_is_persistent_and_fractional_sides_are_rejected() {
     type_value(&mut h, "5");
     enter(&mut h);
     assert!(constraints(&h).iter().any(|c| matches!(c,ConstraintKind::Radius{value,..} if (*value-10.0).abs()<1e-7)));
-    let state = h.app.session.world_state();
+    let state = h.app.session.world_state().unwrap();
     let sketch = &state.sketch(h.app.session.active_sketch.unwrap()).unwrap().sketch;
     assert_eq!(sketch.curves.iter().filter(|c| !c.construction).count(), 5);
 }
@@ -143,7 +210,7 @@ fn line_angle_survives_drag_and_one_undo_removes_geometry_and_dimensions() {
     h.step(&json!({"key":"Escape"})).unwrap();
     h.step(&json!({"key":"Escape"})).unwrap();
     h.step(&json!({"drag":[{"world":[8.660254037844386,5,0]},{"world":[16,14,0]}]})).unwrap();
-    let state = h.app.session.world_state();
+    let state = h.app.session.world_state().unwrap();
     let sketch = &state.sketch(h.app.session.active_sketch.unwrap()).unwrap().sketch;
     let CurveKind::Line { a, b } = sketch.curves[0].kind else { panic!("expected line") };
     let vector = sketch.points[b].pos - sketch.points[a].pos;
@@ -155,7 +222,7 @@ fn line_angle_survives_drag_and_one_undo_removes_geometry_and_dimensions() {
     }
     h.app.run("edit.undo", json!({})).unwrap();
     assert!(constraints(&h).is_empty());
-    assert!(h.app.session.world_state().sketch(h.app.session.active_sketch.unwrap()).unwrap().sketch.curves.is_empty());
+    assert!(h.app.session.world_state().unwrap().sketch(h.app.session.active_sketch.unwrap()).unwrap().sketch.curves.is_empty());
 }
 
 #[test]
@@ -170,12 +237,12 @@ fn typed_drawing_preserves_construction_and_centerline_modes_at_undo_limit() {
         type_value(&mut h, "30 deg");
         enter(&mut h);
         assert_eq!(h.app.session.undo.len(), 200);
-        let state = h.app.session.world_state();
+        let state = h.app.session.world_state().unwrap();
         let sketch = &state.sketch(h.app.session.active_sketch.unwrap()).unwrap().sketch;
         assert_eq!(sketch.curves[0].construction, mode == 1);
         assert_eq!(sketch.curves[0].centerline, mode == 2);
         h.app.run("edit.undo", json!({})).unwrap();
-        let state = h.app.session.world_state();
+        let state = h.app.session.world_state().unwrap();
         let sketch = &state.sketch(h.app.session.active_sketch.unwrap()).unwrap().sketch;
         assert!(sketch.curves.is_empty());
         assert!(sketch.constraints.is_empty());
@@ -198,7 +265,7 @@ fn the_arc_end_pick_snaps_to_a_point_under_the_value_box() {
         h.app.run("sketch.construction", json!({"curves":["l1"]})).unwrap();
         h.call("ui.view", json!({"view":"top"}));
         h.app.cam.distance = 60.0;
-        h.app.cam.target = solidcraft_engine::geom::Vec3::new(0.0, 5.0, 0.0);
+        h.app.cam.target = solidcore_record::Vec3::new(0.0, 5.0, 0.0);
         h.settle();
         h.step(&json!({"start":command})).unwrap();
         for p in picks {
@@ -214,7 +281,7 @@ fn the_arc_end_pick_snaps_to_a_point_under_the_value_box() {
         if command != "sketch.arc.center_point" {
             continue;
         }
-        let state = h.app.session.world_state();
+        let state = h.app.session.world_state().unwrap();
         let sketch = &state.sketch(h.app.session.active_sketch.unwrap()).unwrap().sketch;
         let line_end = sketch.curves.iter().find(|c| c.id == "l1").and_then(|c| match c.kind {
             CurveKind::Line { b, .. } => Some(b),
